@@ -1,8 +1,8 @@
 """El grafo de LangGraph que conecta todo.
 
-    python graph.py "que tipos de exoplanetas existen"
-    python graph.py "buscame planetas rocosos con temperaturas extremas"
-    python graph.py "contame mas del primero"
+    python -m odd_worlds.agent.graph "que tipos de exoplanetas existen"
+    python -m odd_worlds.agent.graph "buscame planetas rocosos con temperaturas extremas"
+    python -m odd_worlds.agent.graph "contame mas del primero"
 
 El modelo interpreta y redacta; el grafo controla el flujo.
 Todo el control de flujo es código testeable sin llamar a ningún modelo.
@@ -20,13 +20,13 @@ import numpy as np
 import pandas as pd
 from langgraph.graph import StateGraph, END
 
-from anomaly import (
+from odd_worlds.catalog.anomaly import (
     FEATURES, LOG_COLS, Z_THRESHOLD,
     prepare_features, score_anomalies, attribute, top_two_drivers, flag_quality,
 )
-from fetch_data import fetch
-from kb_search import search as kb_search
-from prompts import ROUTER, EXPLAIN, REPORT
+from odd_worlds.catalog.fetch import fetch
+from odd_worlds.kb.search import search as kb_search
+from odd_worlds.agent.prompts import ROUTER, EXPLAIN, REPORT
 
 
 # ── configuración de Gemini ──────────────────────────────────
