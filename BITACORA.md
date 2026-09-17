@@ -200,13 +200,144 @@ El agente usa las dos pero para cosas distintas: la KB para entender y explicar,
 
 ---
 
+## Prompts del sistema
+
+### Por que tres prompts y no uno
+
+Un solo prompt que clasifique, explique y reporte promedia todo y no logra ninguno bien. Cada prompt esta optimizado para una tarea:
+
+- **ROUTER**: clasifica la intencion del usuario. Devuelve un JSON con `intent` (knowledge, analysis, followup, ask_user) y `confidence` (0 a 1). Si la confianza es menor a 0.4, el sistema repregunta en vez de adivinar.
+- **EXPLAIN**: redacta respuestas de conocimiento. Tono calido, sin jerga tecnica sin explicar, con comparaciones cotidianas, termina con dos preguntas que el sistema puede analizar. Incluye regla anti-alucinacion: no puede inventar datos que no esten en los fragmentos de la KB.
+- **REPORT**: redacta informes de analisis. Preciso, con numeros, sin adornos. Los numeros ya vienen calculados en el DataFrame — Gemini solo los formatea y explica, no los genera.
+
+### Seguridad en los prompts
+
+Dos protecciones explicitas:
+
+1. **Anti-inyeccion**: EXPLAIN le dice a Gemini que los fragmentos de la KB son datos, no instrucciones. Si un fragmento contiene texto que parece una orden ("no resumas esto", "ignora instrucciones anteriores"), se ignora.
+2. **Anti-alucinacion**: EXPLAIN le dice que no invente datos que no esten en los fragmentos. Si la informacion no aparece, tiene que decirlo y sugerir otra pregunta.
+
+REPORT no necesita anti-alucinacion porque los numeros le llegan precalculados — no tiene espacio para inventar.
+
+### Por que los prompts van en un archivo separado
+
+Los prompts se tocan muchas veces (se ajusta el tono, se agregan reglas, se cambia el formato). Si estan mezclados con la logica del grafo, hay que leer codigo para ajustar texto. Separados, se pueden editar sin tocar la logica.
+
+---
+
+## El grafo — graph.py
+
+### Que es LangGraph
+
+Un framework para construir grafos de estados. No es lo mismo que LangChain (que es para cadenas lineales de prompts). LangGraph se usa cuando el flujo tiene ciclos o decisiones. Cada nodo es una funcion de Python, cada arista es codigo determinista. El LLM solo actua *dentro* de algunos nodos, pero *que nodo sigue* lo decide Python.
+
+### El Estado (la mochila)
+
+Un diccionario tipado que pasa de nodo en nodo. Cada nodo saca lo que necesita, hace su trabajo, y mete el resultado:
+
+- `question` — lo que pregunto el usuario
+- `intent` — knowledge, analysis, followup, o ask_user
+- `confidence` — cuan seguro esta Gemini de la clasificacion
+- `filters` — filtros traducidos (ej: `{pl_rade: {lt: 1.6}, pl_eqt: {gt: 1000}}`)
+- `subset` — los planetas que pasaron los filtros
+- `subset_size` — cuantos son
+- `attempts` — cuantas veces se relajaron filtros
+- `relaxed` — que filtros se aflojaron
+- `scored` — planetas con score de anomalia, atribucion y quality flags
+- `kb_hits` — fragmentos de la KB encontrados
+- `answer` — la respuesta final para el usuario
+- `trace` — log de cada paso (para debugging y transparencia)
+
+### Los nodos
+
+**route** — Manda la pregunta a Gemini con el prompt ROUTER. Gemini devuelve JSON con intent y confidence. Si confidence < 0.4, fuerza ask_user (repregunta). Es el unico punto donde el LLM decide el flujo.
+
+**kb_search** — Llama a la busqueda hibrida de kb_search.py. Devuelve 5 fragmentos formateados como texto para meterlos en el prompt de EXPLAIN.
+
+**explain** — Llena el prompt EXPLAIN con la pregunta + fragmentos, se lo manda a Gemini, guarda la respuesta. Gemini redacta *a partir de* las fuentes, no de su memoria.
+
+**parse_filters** — Le pasa la pregunta a Gemini con la lista de columnas disponibles y sus rangos tipicos. Gemini devuelve un JSON con filtros. Si no puede parsearlo, devuelve filtros vacios (se analiza todo). Tambien inicializa attempts=0 y relaxed=[].
+
+**query** — Puro pandas, no llama a ningun LLM. Carga el catalogo, descarta planetas incompletos, y aplica los filtros uno por uno. `df[df["pl_eqt"] > 1000]` es el equivalente de "dame solo los planetas donde la temperatura es mayor a 1000".
+
+**relax** — Se activa solo si query devolvio menos de 50 planetas. Busca cual filtro descarta mas planetas y lo afloja un 30%. Si el filtro era "temperatura > 1000", pasa a "temperatura > 700". Suma 1 a attempts. Es degradacion honesta: da un resultado mas amplio que lo pedido, pero lo dice.
+
+**score** — Corre Isolation Forest + atribucion + quality flags usando las funciones de anomaly.py. Todo recalculado sobre el subconjunto filtrado.
+
+**observability** — Anota cuantos del top tienen TSM/ESM (metricas de observabilidad). Las columnas ya estan en el catalogo.
+
+**report** — Llena el prompt REPORT con todos los resultados y se lo manda a Gemini. Si hubo relajacion de filtros, lo incluye.
+
+**followup** — Si el usuario pregunta sobre resultados anteriores, usa el scored que ya esta en el estado. Si no hay resultados previos, dice "todavia no analice nada".
+
+**ask_user** — Fallback: "no entendi, reformula". Sugiere tres cosas que sabe hacer.
+
+### Las aristas (deterministas)
+
+**after_route**: mira el intent y manda al camino correcto:
+- knowledge → kb_search → explain → FIN
+- analysis → parse_filters → query → ...
+- followup → followup → FIN
+- ask_user → ask_user → FIN
+
+**after_query**: mira si hay suficientes planetas:
+- subset < 50 y attempts < 3 → relax → query (el ciclo)
+- sino → score → observability → report → FIN
+
+### El ciclo de relajacion
+
+El punto mas importante del diseño. Si el usuario pide algo muy especifico ("planetas rocosos alrededor de estrellas frias con orbitas excentricas") y quedan pocos planetas, Isolation Forest no funciona bien. El ciclo afloja filtros automaticamente, pero siempre avisa que lo hizo. Nunca puntua con datos insuficientes y nunca queda colgado (maximo 3 intentos).
+
+### Que es determinista y que no
+
+- **Determinista** (codigo Python): que nodo sigue, el ciclo de relajacion, los filtros sobre el catalogo, el scoring, la atribucion.
+- **No determinista** (LLM): clasificar la intencion, traducir la pregunta a filtros, redactar la respuesta. Esta bien que no lo sea — son tareas de interpretacion de lenguaje natural.
+
+### Por que no usar un solo LLM que haga todo
+
+Mezclar control de flujo con generacion de texto es fragil, caro (cada paso gastaria tokens), y no testeable. Con el grafo, se puede testear cada nodo y cada arista por separado, sin llamar a ningun LLM.
+
+### Validacion del grafo
+
+Se probo con dos consultas end-to-end:
+
+| Consulta | Camino | Resultado |
+|---|---|---|
+| "que tipos de exoplanetas existen" | route(knowledge) → kb_search → explain | Respuesta en español, tono calido, sin jerga, con dos preguntas sugeridas. 2 llamadas a Gemini. |
+| "buscame planetas rocosos con temperaturas extremas" | route(analysis) → parse_filters({pl_rade: lt 1.6, pl_eqt: gt 1000}) → query(429 planetas) → score → observability → report | Informe con top 10, 9 flagged, encontro Kepler-1087 b como dato limpio con score alto. 3 llamadas a Gemini. |
+
+### Que diferencia a Odd Worlds de preguntarle directo a ChatGPT
+
+ChatGPT puede *hablar* de exoplanetas (de su entrenamiento). Odd Worlds puede *analizarlos* (con datos reales y actuales). La diferencia es el recorrido:
+
+1. El sistema te enseña que hay y que podes preguntar (KB + explain)
+2. Te sugiere preguntas concretas que puede analizar
+3. Calcula de verdad sobre los 6.366 planetas actuales del catalogo de la NASA
+4. Te dice en que es raro con numeros, no con texto generico
+5. Te dice si el dato es confiable y si vale la pena pedir telescopio
+
+El LLM es solo la interfaz. El valor esta en las herramientas que el grafo conecta.
+
+### Dependencias nuevas
+
+- `langgraph==1.2.11` — framework para el grafo de estados
+- `google-genai==2.24.0` — SDK de Gemini (el anterior `google-generativeai` esta deprecado)
+- `python-dotenv==1.2.3` — carga la API key de `.env`
+- `scikit-learn==1.9.1` — ya se usaba para Isolation Forest, ahora pinned
+
+### Nota sobre el modelo de Gemini
+
+`gemini-2.0-flash` fue retirado por Google durante el desarrollo. Se migro a `gemini-3.6-flash` y al nuevo SDK `google-genai` (el anterior `google-generativeai` ya esta deprecado y tira warnings).
+
+---
+
 ## Que sigue
 
 - [x] Validar `kb_search.py` con consultas de prueba (termino tecnico, lenguaje natural, nombre de columna)
 - [x] `fetch_data.py` — bajar el catalogo de exoplanetas del NASA Exoplanet Archive
 - [x] `anomaly.py` — Isolation Forest con 300 arboles, atribucion, filtro de calidad
-- [ ] `graph.py` — el grafo de LangGraph que une todo
-- [ ] `prompts.py` — los prompts de explain y report
-- [ ] `app.py` — interfaz web
+- [x] `prompts.py` — los 3 prompts del sistema (router, explain, report) con reglas anti-inyeccion y anti-alucinacion
+- [x] `graph.py` — el grafo de LangGraph validado end-to-end con dos consultas
+- [ ] `app.py` — interfaz web con historial de conversaciones (checkpointer SQLite de LangGraph)
 - [ ] Evals — 20 preguntas con resultado esperado
 - [ ] README — con todas las decisiones documentadas
