@@ -27,20 +27,25 @@ from sentence_transformers import SentenceTransformer
 KB = Path("data/kb")
 RAW = KB / "raw"
 
-# El modelo de embeddings. 384 dimensiones, ~100 MB, corre local y sin internet.
-# Se baja solo la primera vez a ~/.cache/huggingface.
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# El modelo de embeddings. 384 dimensiones, corre local y sin internet.
+# MULTILINGÜE a propósito: las fuentes están en inglés y las preguntas en español,
+# así que los dos idiomas tienen que caer cerca en el mismo espacio vectorial.
+# Se baja solo la primera vez a ~/.cache/huggingface (~450 MB).
+EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 # Documentos de prosa. Poné acá las URLs que verificaste vos.
 PROSE_SOURCES = {
     "nasa_exoplanets_overview": "https://science.nasa.gov/exoplanets/",
+    "nasa_what_is_an_exoplanet": "https://science.nasa.gov/exoplanets/facts/",
     "nasa_planet_types": "https://science.nasa.gov/exoplanets/planet-types/",
-    "nasa_types_infographic": "https://science.nasa.gov/resource/exoplanet-types-infographic/",
-    # "nasa_discovery_methods": "<-- pegá acá la URL de métodos de descubrimiento>",
+    "nasa_gas_giant": "https://science.nasa.gov/exoplanets/gas-giant/",
+    "nasa_super_earth": "https://science.nasa.gov/exoplanets/super-earth/",
+    "nasa_strange_new_worlds": "https://science.nasa.gov/exoplanets/immersive/strange-new-worlds/",
+    "nasa_is_earth_an_oddball": "https://science.nasa.gov/universe/exoplanets/is-earth-an-oddball/",
 }
 
 # Documento de columnas: es una tabla HTML, se parsea distinto.
-COLUMNS_SOURCE = "https://exoplanetarchive.ipac.caltech.edu/docs/API_exoplanet_columns.html"
+COLUMNS_SOURCE = "https://exoplanetarchive.ipac.caltech.edu/docs/API_PS_columns.html"
 
 MAX_WORDS = 400   # tamaño máximo de un fragmento de prosa
 OVERLAP = 50      # palabras que se repiten entre fragmentos consecutivos
@@ -62,8 +67,8 @@ def download(name: str, url: str) -> str:
         return path.read_text(encoding="utf-8")
 
     html = requests.get(url, timeout=60, headers={"User-Agent": "odd-worlds/0.1"}).text
-    # include_headings=True es clave: necesitamos los títulos para cortar por sección.
-    text = trafilatura.extract(html, output_format="markdown", include_headings=True) or ""
+    # output_format="markdown" incluye los encabezados, que necesitamos para cortar por sección.
+    text = trafilatura.extract(html, output_format="markdown") or ""
     if not text.strip():
         raise RuntimeError(f"no se pudo extraer texto de {url}. Copialo a mano a {path}")
 
