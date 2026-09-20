@@ -5,4 +5,6 @@ data/kb/chunks.parquet
 data/cache/
 CLAUDE.md
 .env
+*.log
+data/conversations.db*
 

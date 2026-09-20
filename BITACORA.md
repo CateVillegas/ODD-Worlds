@@ -35,6 +35,23 @@ El flujo tiene un ciclo: si la consulta del usuario devuelve muy pocos planetas 
 Orden innegociable: KB primero, despues catalogo + modelo de anomalias, recien ahi el grafo. Si armas el grafo antes, estas debuggeando cinco piezas a la vez sin saber cual falla.
 
 
+### Por que la estructura de carpetas es modular por capas
+
+Todo el codigo esta en el paquete `odd_worlds/`, separado en tres subcarpetas que reflejan las tres capas de la arquitectura:
+
+```
+odd_worlds/
+  kb/           build.py, search.py       ← base de conocimiento
+  catalog/      fetch.py, anomaly.py      ← datos y deteccion de anomalias
+  agent/        graph.py, prompts.py      ← grafo LangGraph y prompts
+```
+
+Cada capa tiene una responsabilidad distinta y se puede testear por separado. Los imports entre capas son explicitos (`from odd_worlds.kb.search import search`) — se lee exactamente que se usa y de donde viene.
+
+Los archivos de datos (`data/`), la configuracion (`.env`, `requirements.txt`), la documentacion (`BITACORA.md`, `README.md`) y el punto de entrada (`app.py`) quedan en la raiz porque no son parte de la logica del paquete.
+
+Alternativa descartada: dejar todo en la raiz. Con 6 archivos parece manejable, pero al agregar app.py, evals y utils la raiz se convierte en una lista plana donde cuesta encontrar las cosas. Mejor organizar antes de que sea un problema.
+
 ### Por que sin vector store
 
 Con ~300 fragmentos, la busqueda exhaustiva en numpy es exacta y mas rapida que el overhead de levantar una base vectorial. 

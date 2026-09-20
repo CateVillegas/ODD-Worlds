@@ -57,9 +57,14 @@ class State(TypedDict, total=False):
 
 # ── helpers ──────────────────────────────────────────────────
 
-def _call_llm(prompt: str) -> str:
+def _call_llm(prompt: str, max_tokens: int = 400) -> str:
     """Una sola función para todas las llamadas a Gemini."""
-    resp = _client.models.generate_content(model=_MODEL, contents=prompt)
+    from google.genai import types
+    resp = _client.models.generate_content(
+        model=_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(max_output_tokens=max_tokens),
+    )
     return resp.text.strip()
 
 
@@ -91,7 +96,7 @@ def _format_scored(df: pd.DataFrame, top_n: int = 10) -> str:
 def route(state: State) -> State:
     """Clasifica la intención del usuario con el LLM."""
     prompt = ROUTER.format(question=state["question"])
-    raw = _call_llm(prompt)
+    raw = _call_llm(prompt, max_tokens=60)
 
     # Gemini a veces envuelve el JSON en ```json ... ```
     cleaned = raw.strip().removeprefix("```json").removesuffix("```").strip()
@@ -103,8 +108,8 @@ def route(state: State) -> State:
     intent = parsed.get("intent", "ask_user")
     confidence = parsed.get("confidence", 0.0)
 
-    # Si la confianza es muy baja, repreguntamos
-    if confidence < 0.4:
+    # Solo repreguntamos si la confianza es realmente baja
+    if confidence < 0.2:
         intent = "ask_user"
 
     trace = state.get("trace", [])
@@ -371,6 +376,20 @@ Pregunta del usuario:
     return {**state, "answer": answer, "trace": trace}
 
 
+def greeting(state: State) -> State:
+    """Responde a saludos y preguntas generales sobre el sistema."""
+    return {
+        **state,
+        "answer": (
+            "Hola! Soy Odd Worlds, analizo exoplanetas y te cuento "
+            "cuales son los mas raros del catalogo.\n\n"
+            "Podes preguntarme sobre tipos de planetas, como se detectan, "
+            "o pedirme que busque los mas raros con algun filtro."
+        ),
+        "trace": state.get("trace", []) + ["greeting -> bienvenida"],
+    }
+
+
 def ask_user(state: State) -> State:
     """No se entendió la pregunta, pide que reformule."""
     return {
@@ -387,7 +406,9 @@ def ask_user(state: State) -> State:
 def after_route(state: State) -> str:
     """Decide qué nodo sigue según la intención clasificada."""
     intent = state.get("intent", "ask_user")
-    if intent == "knowledge":
+    if intent == "greeting":
+        return "greeting"
+    elif intent == "knowledge":
         return "kb_search"
     elif intent == "analysis":
         return "parse_filters"
@@ -408,10 +429,11 @@ def after_query(state: State) -> str:
 
 # ── construcción del grafo ───────────────────────────────────
 
-def build_graph() -> StateGraph:
+def build_graph(checkpointer=None):
     g = StateGraph(State)
 
     g.add_node("route", route)
+    g.add_node("greeting", greeting)
     g.add_node("kb_search", node_kb_search)
     g.add_node("explain", explain)
     g.add_node("parse_filters", parse_filters)
@@ -441,10 +463,11 @@ def build_graph() -> StateGraph:
     g.add_edge("report", END)
 
     # Caminos directos al final
+    g.add_edge("greeting", END)
     g.add_edge("followup", END)
     g.add_edge("ask_user", END)
 
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
 # ── ejecución ────────────────────────────────────────────────
@@ -452,16 +475,17 @@ def build_graph() -> StateGraph:
 _graph = build_graph()
 
 
-def run(question: str, scored: pd.DataFrame | None = None) -> dict:
+def run(question: str, thread_id: str | None = None,
+        graph=None) -> dict:
     """Ejecuta el grafo con una pregunta.
 
-    scored: resultados de una corrida anterior, para followup.
+    thread_id: identificador de conversación para el checkpointer.
+    graph: grafo compilado con checkpointer (si no se pasa, usa el default sin persistencia).
     """
+    g = graph or _graph
     initial: State = {"question": question, "trace": []}
-    if scored is not None:
-        initial["scored"] = scored
-
-    result = _graph.invoke(initial)
+    config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+    result = g.invoke(initial, config=config)
     return result
 
 
