@@ -97,30 +97,16 @@ def _format_scored(df: pd.DataFrame, top_n: int = 10) -> str:
 
 # ── nodos ────────────────────────────────────────────────────
 
-_GREETINGS = {
-    "hola", "hey", "buenas", "buen dia", "buenos dias", "que tal",
-    "que onda", "como estas", "que haces", "hi", "hello",
-    "ayuda", "help", "gracias", "chau", "adios", "que es esto",
-    "que podes hacer", "como funciona", "de que se trata",
-}
-
 _VALID_INTENTS = {"greeting", "knowledge", "analysis", "followup", "ask_user"}
 
 
 def route(state: State) -> State:
-    """Clasifica la intención del usuario.
+    """Clasifica la intención del usuario con el LLM.
 
-    Primero intenta keyword matching para saludos obvios (gratis, sin
-    LLM). Para todo lo demás, usa el LLM. Si el LLM falla o devuelve
-    basura, defaultea a knowledge (intentar responder) en vez de
-    ask_user (rechazar).
+    Si el LLM falla o devuelve basura, defaultea a knowledge
+    (intentar responder) en vez de ask_user (rechazar).
     """
-    q = state["question"].lower().strip().rstrip("!?., ")
     trace = state.get("trace", [])
-
-    if q in _GREETINGS:
-        trace.append("route → greeting (keyword)")
-        return {**state, "intent": "greeting", "confidence": 1.0, "trace": trace}
 
     prompt = ROUTER.format(question=state["question"])
     try:

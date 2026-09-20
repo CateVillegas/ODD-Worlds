@@ -107,12 +107,12 @@ def _split_bubbles(text: str) -> list[str]:
             if current:
                 bubbles.append(" ".join(current))
 
-    return bubbles[:4] if bubbles else [text.strip()]
+    return bubbles[:8] if bubbles else [text.strip()]
 
 
 def respond(message: str, history: list[dict], thread_id: str):
     if not message or not message.strip():
-        yield "", history, thread_id, gr.update()
+        yield "", history, thread_id
         return
 
     if not thread_id or thread_id not in _threads:
@@ -120,7 +120,7 @@ def respond(message: str, history: list[dict], thread_id: str):
 
     history = history + [{"role": "user", "content": message}]
     history_typing = history + [{"role": "assistant", "content": "..."}]
-    yield "", history_typing, thread_id, gr.update(visible=False)
+    yield "", history_typing, thread_id
 
     try:
         result = _graph.invoke(
@@ -144,7 +144,7 @@ def respond(message: str, history: list[dict], thread_id: str):
     for bubble in bubbles:
         history_clean = history_clean + [{"role": "assistant", "content": bubble}]
 
-    yield "", history_clean, thread_id, gr.update(visible=False)
+    yield "", history_clean, thread_id
 
 
 def _make_suggestion_handler(text: str):
@@ -155,7 +155,7 @@ def _make_suggestion_handler(text: str):
 
 def new_conversation():
     tid = _new_thread()
-    return "", [], tid, gr.update(visible=True)
+    return "", [], tid
 
 
 # ── Tema ──
@@ -303,26 +303,15 @@ html, body { height: 100% !important; margin: 0 !important; overflow: hidden !im
 .chatbot-area .message-buttons-left { display: none !important; }
 footer { display: none !important; }
 
-/* ── Suggestions ── */
-.sug-row {
-    flex-wrap: wrap !important; gap: 8px !important;
-    justify-content: center !important;
-    padding: 0.4rem 0.5rem !important; flex-shrink: 0 !important;
-    max-width: 38rem !important; margin: 0 auto !important;
-}
-.sug-btn {
-    flex: 0 1 calc(50% - 4px) !important;
-    border-radius: 12px !important; font-size: 0.75rem !important;
-    padding: 0.45rem 0.7rem !important;
-    min-height: unset !important; height: auto !important;
-    text-align: left !important;
+/* ── Chatbot examples (suggestions inside chatbot) ── */
+.chatbot-area .example-btn {
+    border-radius: 12px !important;
+    font-size: 0.78rem !important;
     background: rgba(19,24,45,0.6) !important;
     border: 1px solid rgba(42,50,80,0.7) !important;
     color: rgba(229,231,240,0.85) !important;
-    transition: border-color 0.2s, background 0.2s !important;
-    white-space: normal !important; line-height: 1.3 !important;
 }
-.sug-btn:hover {
+.chatbot-area .example-btn:hover {
     border-color: rgba(139,92,246,0.4) !important;
     background: rgba(19,24,45,0.95) !important;
 }
@@ -468,23 +457,15 @@ with gr.Blocks(title="Odd Worlds") as app:
                 show_label=False,
                 label="",
                 container=False,
+                height="calc(100vh - 180px)",
                 elem_classes=["chatbot-area"],
                 placeholder=EMPTY_STATE_HTML,
                 layout="bubble",
+                examples=[
+                    {"text": s, "display_text": s}
+                    for s in SUGGESTIONS
+                ],
             )
-
-            sug_row = gr.Row(elem_classes=["sug-row"])
-            with sug_row:
-                sug_btns = []
-                for s in SUGGESTIONS:
-                    sug_btns.append(
-                        gr.Button(
-                            s,
-                            size="sm",
-                            variant="secondary",
-                            elem_classes=["sug-btn"],
-                        )
-                    )
 
             with gr.Row(elem_classes=["input-area"]):
                 msg = gr.Textbox(
@@ -523,17 +504,17 @@ with gr.Blocks(title="Odd Worlds") as app:
 
     # ── Events ──
 
-    outputs = [msg, chatbot, thread_state, sug_row]
+    outputs = [msg, chatbot, thread_state]
 
     msg.submit(respond, [msg, chatbot, thread_state], outputs)
     send_btn.click(respond, [msg, chatbot, thread_state], outputs)
 
-    for i, btn in enumerate(sug_btns):
-        btn.click(
-            _make_suggestion_handler(SUGGESTIONS[i]),
-            [chatbot, thread_state],
-            outputs,
-        )
+    def on_example_select(evt: gr.SelectData, history, thread_id):
+        yield from respond(evt.value["text"], history, thread_id)
+
+    chatbot.example_select(
+        on_example_select, [chatbot, thread_state], outputs,
+    )
 
     new_btn.click(new_conversation, outputs=outputs)
 

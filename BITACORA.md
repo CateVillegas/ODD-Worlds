@@ -223,7 +223,7 @@ El agente usa las dos pero para cosas distintas: la KB para entender y explicar,
 
 Un solo prompt que clasifique, explique y reporte promedia todo y no logra ninguno bien. Cada prompt esta optimizado para una tarea:
 
-- **ROUTER**: clasifica la intencion del usuario. Para saludos obvios hay un atajo por keyword que no usa LLM. Para el resto, Gemini devuelve un JSON con `intent` (greeting, knowledge, analysis, followup, ask_user) y `confidence` (0 a 1). Si la respuesta del LLM no es JSON valido, se extrae el intent del texto. Si todo falla, defaultea a knowledge — es mejor intentar responder que rechazar la pregunta.
+- **ROUTER**: clasifica la intencion del usuario. Gemini devuelve un JSON con `intent` (greeting, knowledge, analysis, followup, ask_user) y `confidence` (0 a 1). Si la respuesta del LLM no es JSON valido, se extrae el intent del texto. Si todo falla, defaultea a knowledge — es mejor intentar responder que rechazar la pregunta. Se evito un atajo por keywords para saludos porque las variaciones son infinitas ("holaaa", "buenass", "como va") y una lista fija no las cubre — el LLM las clasifica mejor.
 - **EXPLAIN**: redacta respuestas de conocimiento. Tono calido, sin jerga tecnica sin explicar, con comparaciones cotidianas, termina con dos preguntas que el sistema puede analizar. Incluye regla anti-alucinacion: no puede inventar datos que no esten en los fragmentos de la KB.
 - **REPORT**: redacta informes de analisis. Preciso, con numeros, sin adornos. Los numeros ya vienen calculados en el DataFrame — Gemini solo los formatea y explica, no los genera.
 
@@ -267,7 +267,7 @@ Un diccionario tipado que pasa de nodo en nodo. Cada nodo saca lo que necesita, 
 
 ### Los nodos
 
-**route** — Primero intenta keyword matching para saludos obvios ("hola", "ayuda", "gracias", etc.) — no quema una llamada a la API y no puede fallar. Para todo lo demas, manda la pregunta a Gemini con el prompt ROUTER. Gemini devuelve JSON con intent y confidence. Si el JSON no se puede parsear, extrae el intent del texto libre. Si todo falla, defaultea a knowledge (intenta responder) en vez de ask_user (rechaza). Es el unico punto donde el LLM decide el flujo.
+**route** — Manda la pregunta a Gemini con el prompt ROUTER. Gemini devuelve JSON con intent y confidence. Si el JSON no se puede parsear, extrae el intent del texto libre. Si todo falla, defaultea a knowledge (intenta responder) en vez de ask_user (rechaza). Es el unico punto donde el LLM decide el flujo. No se usa keyword matching para saludos porque las variaciones naturales ("holaa", "q onda", "como va todo") son infinitas y una lista fija no las cubre.
 
 **kb_search** — Llama a la busqueda hibrida de kb_search.py. Devuelve 5 fragmentos formateados como texto para meterlos en el prompt de EXPLAIN.
 
@@ -287,7 +287,7 @@ Un diccionario tipado que pasa de nodo en nodo. Cada nodo saca lo que necesita, 
 
 **followup** — Si el usuario pregunta sobre resultados anteriores, usa el scored que ya esta en el estado. Si no hay resultados previos, dice "todavia no analice nada".
 
-**greeting** — Responde a saludos y preguntas generales sobre el sistema. Es una respuesta fija (no usa LLM) que explica que es Odd Worlds y que puede hacer. Rapida y sin costo de API.
+**greeting** — Responde a saludos y preguntas generales sobre el sistema. Usa una respuesta predefinida que explica que es Odd Worlds y que puede hacer. Sin costo de API adicional (la unica llamada es la del router para clasificar).
 
 **ask_user** — Fallback: "no entendi, reformula". Sugiere tres cosas que sabe hacer.
 
@@ -365,7 +365,7 @@ Una interfaz Gradio con dos tabs:
 
 **Tema deep-navy con violeta.** Fondo oscuro (#0b0f1e) con acentos en violeta (#8b5cf6). Background con gradientes radiales simulando nebulosa. Coherente con el tema espacial del proyecto.
 
-**Layout tipo chat conversacional.** El area de chat tiene altura fija con scroll interno — no crece con los mensajes empujando el input fuera de pantalla. Las sugerencias se ocultan despues del primer mensaje. El input queda siempre visible abajo. Es el patron estandar de interfaces como Claude o ChatGPT.
+**Layout tipo chat conversacional.** El area de chat tiene altura fija (`calc(100vh - 180px)`) con scroll interno — no crece con los mensajes empujando el input fuera de pantalla. Las sugerencias iniciales aparecen dentro del chatbot usando el parametro `examples` de Gradio, y el input queda siempre visible abajo. Es el patron estandar de interfaces como Claude o ChatGPT.
 
 **Sin sidebar.** El historial de conversaciones via dropdown no aportaba valor suficiente y robaba espacio al chat. Hay un boton "Nueva conversacion" en el header. La persistencia sigue funcionando via el checkpointer SQLite de LangGraph.
 
