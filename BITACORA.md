@@ -3,7 +3,7 @@
 Registro de decisiones, pasos y explicaciones del proyecto.
 Tecnico pero explicado simple — para estudiar antes de la entrevista y como base para un paper.
 
-Ultima actualizacion: 2026-09-17
+Ultima actualizacion: 2026-09-20
 
 ---
 
@@ -223,7 +223,7 @@ El agente usa las dos pero para cosas distintas: la KB para entender y explicar,
 
 Un solo prompt que clasifique, explique y reporte promedia todo y no logra ninguno bien. Cada prompt esta optimizado para una tarea:
 
-- **ROUTER**: clasifica la intencion del usuario. Devuelve un JSON con `intent` (knowledge, analysis, followup, ask_user) y `confidence` (0 a 1). Si la confianza es menor a 0.4, el sistema repregunta en vez de adivinar.
+- **ROUTER**: clasifica la intencion del usuario. Para saludos obvios hay un atajo por keyword que no usa LLM. Para el resto, Gemini devuelve un JSON con `intent` (greeting, knowledge, analysis, followup, ask_user) y `confidence` (0 a 1). Si la respuesta del LLM no es JSON valido, se extrae el intent del texto. Si todo falla, defaultea a knowledge — es mejor intentar responder que rechazar la pregunta.
 - **EXPLAIN**: redacta respuestas de conocimiento. Tono calido, sin jerga tecnica sin explicar, con comparaciones cotidianas, termina con dos preguntas que el sistema puede analizar. Incluye regla anti-alucinacion: no puede inventar datos que no esten en los fragmentos de la KB.
 - **REPORT**: redacta informes de analisis. Preciso, con numeros, sin adornos. Los numeros ya vienen calculados en el DataFrame — Gemini solo los formatea y explica, no los genera.
 
@@ -267,7 +267,7 @@ Un diccionario tipado que pasa de nodo en nodo. Cada nodo saca lo que necesita, 
 
 ### Los nodos
 
-**route** — Manda la pregunta a Gemini con el prompt ROUTER. Gemini devuelve JSON con intent y confidence. Si confidence < 0.4, fuerza ask_user (repregunta). Es el unico punto donde el LLM decide el flujo.
+**route** — Primero intenta keyword matching para saludos obvios ("hola", "ayuda", "gracias", etc.) — no quema una llamada a la API y no puede fallar. Para todo lo demas, manda la pregunta a Gemini con el prompt ROUTER. Gemini devuelve JSON con intent y confidence. Si el JSON no se puede parsear, extrae el intent del texto libre. Si todo falla, defaultea a knowledge (intenta responder) en vez de ask_user (rechaza). Es el unico punto donde el LLM decide el flujo.
 
 **kb_search** — Llama a la busqueda hibrida de kb_search.py. Devuelve 5 fragmentos formateados como texto para meterlos en el prompt de EXPLAIN.
 
@@ -287,11 +287,14 @@ Un diccionario tipado que pasa de nodo en nodo. Cada nodo saca lo que necesita, 
 
 **followup** — Si el usuario pregunta sobre resultados anteriores, usa el scored que ya esta en el estado. Si no hay resultados previos, dice "todavia no analice nada".
 
+**greeting** — Responde a saludos y preguntas generales sobre el sistema. Es una respuesta fija (no usa LLM) que explica que es Odd Worlds y que puede hacer. Rapida y sin costo de API.
+
 **ask_user** — Fallback: "no entendi, reformula". Sugiere tres cosas que sabe hacer.
 
 ### Las aristas (deterministas)
 
 **after_route**: mira el intent y manda al camino correcto:
+- greeting → greeting → FIN
 - knowledge → kb_search → explain → FIN
 - analysis → parse_filters → query → ...
 - followup → followup → FIN
@@ -348,6 +351,45 @@ El LLM es solo la interfaz. El valor esta en las herramientas que el grafo conec
 
 ---
 
+## Interfaz web — app.py
+
+### Que es
+
+Una interfaz Gradio con dos tabs:
+- **Agent**: chat conversacional con el grafo de LangGraph
+- **Dataset**: tabla explorable con los 6.366 exoplanetas del catalogo
+
+### Decisiones de diseño
+
+**Por que Gradio y no Next.js.** El proyecto tiene un frontend Next.js preparado en `frontend/` (paleta violeta, starfield animado, chat con historial). Pero para la demo de la entrevista, Gradio arranca mas rapido, no necesita un servidor Node aparte, y se integra directo con Python. El frontend Next.js queda como referencia de arquitectura para un futuro deploy.
+
+**Tema deep-navy con violeta.** Fondo oscuro (#0b0f1e) con acentos en violeta (#8b5cf6). Background con gradientes radiales simulando nebulosa. Coherente con el tema espacial del proyecto.
+
+**Layout tipo chat conversacional.** El area de chat tiene altura fija con scroll interno — no crece con los mensajes empujando el input fuera de pantalla. Las sugerencias se ocultan despues del primer mensaje. El input queda siempre visible abajo. Es el patron estandar de interfaces como Claude o ChatGPT.
+
+**Sin sidebar.** El historial de conversaciones via dropdown no aportaba valor suficiente y robaba espacio al chat. Hay un boton "Nueva conversacion" en el header. La persistencia sigue funcionando via el checkpointer SQLite de LangGraph.
+
+**Respuestas en burbujas.** Las respuestas largas se parten en burbujas de ~30 palabras. La idea es que se lean como mensajes de chat, no como parrafos de un paper.
+
+### Persistencia
+
+Se usa `SqliteSaver` de LangGraph como checkpointer. Cada conversacion tiene un `thread_id` que mantiene el estado del grafo entre mensajes. Asi el usuario puede hacer followup ("contame mas del primero") y el grafo sabe de que habla.
+
+### Dataset tab
+
+Muestra las 12 columnas mas relevantes del catalogo con nombres en español. Headers sticky, filas alternadas, hover highlight. El objetivo es que alguien pueda explorar los datos sin abrir un notebook.
+
+### Dependencias nuevas para app.py
+
+- `gradio==6.27.0` — interfaz web
+- `langgraph-checkpoint-sqlite==3.1.1` — persistencia de conversaciones
+
+### Nota sobre Gradio 6
+
+En Gradio 6, `theme` y `css` se pasan a `app.launch()`, no al constructor de `Blocks()`. Si se pasan a `Blocks()`, Gradio tira un warning y los ignora.
+
+---
+
 ## Que sigue
 
 - [x] Validar `kb_search.py` con consultas de prueba (termino tecnico, lenguaje natural, nombre de columna)
@@ -355,6 +397,6 @@ El LLM es solo la interfaz. El valor esta en las herramientas que el grafo conec
 - [x] `anomaly.py` — Isolation Forest con 300 arboles, atribucion, filtro de calidad
 - [x] `prompts.py` — los 3 prompts del sistema (router, explain, report) con reglas anti-inyeccion y anti-alucinacion
 - [x] `graph.py` — el grafo de LangGraph validado end-to-end con dos consultas
-- [ ] `app.py` — interfaz web con historial de conversaciones (checkpointer SQLite de LangGraph)
+- [x] `app.py` — interfaz Gradio con tabs Agent/Dataset, tema violeta, persistencia SQLite
 - [ ] Evals — 20 preguntas con resultado esperado
 - [ ] README — con todas las decisiones documentadas

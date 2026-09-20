@@ -60,12 +60,16 @@ class State(TypedDict, total=False):
 def _call_llm(prompt: str, max_tokens: int = 400) -> str:
     """Una sola función para todas las llamadas a Gemini."""
     from google.genai import types
-    resp = _client.models.generate_content(
-        model=_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(max_output_tokens=max_tokens),
-    )
-    return resp.text.strip()
+    try:
+        resp = _client.models.generate_content(
+            model=_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(max_output_tokens=max_tokens),
+        )
+        return (resp.text or "").strip()
+    except Exception as e:
+        print(f"[_call_llm] error: {e}", flush=True)
+        raise
 
 
 def _format_kb_hits(hits: pd.DataFrame) -> str:
@@ -93,28 +97,56 @@ def _format_scored(df: pd.DataFrame, top_n: int = 10) -> str:
 
 # ── nodos ────────────────────────────────────────────────────
 
+_GREETINGS = {
+    "hola", "hey", "buenas", "buen dia", "buenos dias", "que tal",
+    "que onda", "como estas", "que haces", "hi", "hello",
+    "ayuda", "help", "gracias", "chau", "adios", "que es esto",
+    "que podes hacer", "como funciona", "de que se trata",
+}
+
+_VALID_INTENTS = {"greeting", "knowledge", "analysis", "followup", "ask_user"}
+
+
 def route(state: State) -> State:
-    """Clasifica la intención del usuario con el LLM."""
-    prompt = ROUTER.format(question=state["question"])
-    raw = _call_llm(prompt, max_tokens=60)
+    """Clasifica la intención del usuario.
 
-    # Gemini a veces envuelve el JSON en ```json ... ```
-    cleaned = raw.strip().removeprefix("```json").removesuffix("```").strip()
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        parsed = {"intent": "ask_user", "confidence": 0.0}
-
-    intent = parsed.get("intent", "ask_user")
-    confidence = parsed.get("confidence", 0.0)
-
-    # Solo repreguntamos si la confianza es realmente baja
-    if confidence < 0.2:
-        intent = "ask_user"
-
+    Primero intenta keyword matching para saludos obvios (gratis, sin
+    LLM). Para todo lo demás, usa el LLM. Si el LLM falla o devuelve
+    basura, defaultea a knowledge (intentar responder) en vez de
+    ask_user (rechazar).
+    """
+    q = state["question"].lower().strip().rstrip("!?., ")
     trace = state.get("trace", [])
-    trace.append(f"route → {intent} (conf={confidence:.2f})")
 
+    if q in _GREETINGS:
+        trace.append("route → greeting (keyword)")
+        return {**state, "intent": "greeting", "confidence": 1.0, "trace": trace}
+
+    prompt = ROUTER.format(question=state["question"])
+    try:
+        raw = _call_llm(prompt, max_tokens=60)
+        cleaned = raw.strip().removeprefix("```json").removesuffix("```").strip()
+        parsed = json.loads(cleaned)
+        intent = parsed.get("intent", "knowledge")
+        confidence = parsed.get("confidence", 0.5)
+    except json.JSONDecodeError:
+        raw_lower = raw.lower() if raw else ""
+        intent = "knowledge"
+        for candidate in ("analysis", "knowledge", "greeting", "followup"):
+            if candidate in raw_lower:
+                intent = candidate
+                break
+        confidence = 0.3
+        print(f"[route] JSON parse failed, extracted '{intent}' from: {raw}", flush=True)
+    except Exception as e:
+        print(f"[route] LLM error: {e}", flush=True)
+        intent = "knowledge"
+        confidence = 0.3
+
+    if intent not in _VALID_INTENTS:
+        intent = "knowledge"
+
+    trace.append(f"route → {intent} (conf={confidence:.2f})")
     return {**state, "intent": intent, "confidence": confidence, "trace": trace}
 
 
@@ -381,12 +413,16 @@ def greeting(state: State) -> State:
     return {
         **state,
         "answer": (
-            "Hola! Soy Odd Worlds, analizo exoplanetas y te cuento "
-            "cuales son los mas raros del catalogo.\n\n"
-            "Podes preguntarme sobre tipos de planetas, como se detectan, "
-            "o pedirme que busque los mas raros con algun filtro."
+            "¡Hola! Soy Odd Worlds, un sistema que analiza los más de "
+            "6.000 exoplanetas confirmados del catálogo de la NASA y "
+            "encuentra los más raros estadísticamente.\n\n"
+            "Podés preguntarme lo que quieras sobre exoplanetas: cómo se "
+            "detectan, qué tipos hay, cuáles están en la zona habitable... "
+            "Y si querés, puedo buscar los más anómalos aplicando filtros "
+            "que vos me digas.\n\n"
+            "¿Qué te gustaría saber?"
         ),
-        "trace": state.get("trace", []) + ["greeting -> bienvenida"],
+        "trace": state.get("trace", []) + ["greeting → bienvenida"],
     }
 
 
